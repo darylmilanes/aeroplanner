@@ -1,0 +1,18 @@
+```json
+{
+  "name": "Aero Physical Planner",
+  "short_name": "Aero",
+  "description": "A focused digital translation of a physical notebook planner.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#FAF6F0",
+  "theme_color": "#2E251E",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
