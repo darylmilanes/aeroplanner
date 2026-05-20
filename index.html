@@ -8,8 +8,8 @@
   
   <!-- PWA Manifest & Icons -->
   <link rel="manifest" href="manifest.json">
-  <link rel="icon" type="image/svg+xml" href="logo.svg">
-  <link rel="apple-touch-icon" href="logo.svg">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -71,10 +71,19 @@
       return days;
     };
 
+    // --- ID GENERATOR ---
+    const generateShortId = () => {
+      return Math.random().toString(36).substring(2, 8).toUpperCase();
+    };
+
     function App() {
       const [activeTab, setActiveTab] = useState('week');
-      const [user, setUser] = useState(null);
       const [syncStatus, setSyncStatus] = useState('Connecting...');
+      
+      // Cross-Device Sync State
+      const [syncId, setSyncId] = useState(null);
+      const [showSyncModal, setShowSyncModal] = useState(false);
+      const [syncInput, setSyncInput] = useState('');
 
       const [tasks, setTasks] = useState([]);
       const [notes, setNotes] = useState({});
@@ -82,12 +91,25 @@
       const [selectedDateStr, setSelectedDateStr] = useState(getFormattedDateString(new Date()));
       const [weekStart, setWeekStart] = useState(getStartOfWeek(new Date()));
       
-      // Decoupled local inputs
       const [journalInput, setJournalInput] = useState('');
       const [quickTaskTexts, setQuickTaskTexts] = useState({});
       const isTypingNote = useRef(false);
 
-      // 1. Authenticate User
+      // 1. Initialize Sync ID (The fix for cross-device syncing)
+      useEffect(() => {
+        // We use a local ID to group your devices. 
+        // If one doesn't exist, we make one. If you want to sync, you overwrite this local ID with your iPad's ID.
+        const storedSyncId = localStorage.getItem('aero_sync_id');
+        if (storedSyncId) {
+          setSyncId(storedSyncId);
+        } else {
+          const newId = generateShortId();
+          localStorage.setItem('aero_sync_id', newId);
+          setSyncId(newId);
+        }
+      }, []);
+
+      // 2. Authenticate User (Anonymous, but we will use the syncId for data paths)
       useEffect(() => {
         const initAuth = async () => {
           setSyncStatus('Connecting securely...');
@@ -100,19 +122,26 @@
         initAuth();
 
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-          setUser(currentUser);
-          setSyncStatus(currentUser ? 'Sync Online' : 'Offline');
+          // We need an auth token to pass security rules, but we route data via syncId
+          if (currentUser && syncId) {
+            setSyncStatus('Sync Online');
+          } else if (!currentUser) {
+            setSyncStatus('Offline');
+          }
         });
 
         return () => unsubscribe();
-      }, []);
+      }, [syncId]); // Re-run if syncId changes
 
-      // 2. Real-time Database Listeners
+      // 3. Real-time Database Listeners (Now using syncId instead of user.uid)
       useEffect(() => {
-        if (!user) return;
+        // Crucial Fix: We check for auth.currentUser to ensure we have a token for rules, 
+        // but we query the database using the shared syncId
+        if (!auth.currentUser || !syncId) return;
         setSyncStatus('Syncing database...');
 
-        const tasksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
+        // Using syncId ensures your iPad and iPhone look at the exact same folder
+        const tasksRef = collection(db, 'artifacts', appId, 'users', syncId, 'tasks');
         const unsubscribeTasks = onSnapshot(tasksRef, (snapshot) => {
           const fetchedTasks = [];
           snapshot.forEach(doc => {
@@ -122,7 +151,7 @@
           setSyncStatus('All changes saved');
         });
 
-        const notesRef = collection(db, 'artifacts', appId, 'users', user.uid, 'notes');
+        const notesRef = collection(db, 'artifacts', appId, 'users', syncId, 'notes');
         const unsubscribeNotes = onSnapshot(notesRef, (snapshot) => {
           const fetchedNotes = {};
           snapshot.forEach(doc => {
@@ -136,27 +165,27 @@
           unsubscribeTasks();
           unsubscribeNotes();
         };
-      }, [user]);
+      }, [syncId]);
 
-      // 3. Sync incoming notes ONLY if the user is not actively typing
+      // 4. Sync incoming notes ONLY if the user is not actively typing
       useEffect(() => {
         if (!isTypingNote.current) {
           setJournalInput(notes[selectedDateStr] || '');
         }
       }, [selectedDateStr, notes]);
 
-      // 4. Handle typing and debounced saving
+      // 5. Handle typing and debounced saving
       const handleJournalChange = (e) => {
         isTypingNote.current = true;
         setJournalInput(e.target.value);
       };
 
       useEffect(() => {
-        if (!user || !isTypingNote.current) return;
+        if (!auth.currentUser || !syncId || !isTypingNote.current) return;
         
         const delayDebounce = setTimeout(async () => {
           setSyncStatus('Saving note...');
-          const noteRef = doc(db, 'artifacts', appId, 'users', user.uid, 'notes', selectedDateStr);
+          const noteRef = doc(db, 'artifacts', appId, 'users', syncId, 'notes', selectedDateStr);
           await setDoc(noteRef, { content: journalInput, date: selectedDateStr }, { merge: true });
           
           isTypingNote.current = false;
@@ -164,11 +193,11 @@
         }, 1200);
 
         return () => clearTimeout(delayDebounce);
-      }, [journalInput, selectedDateStr, user]);
+      }, [journalInput, selectedDateStr, syncId]);
 
       // --- TASK ACTIONS ---
       const handleAddTask = async (dateStr, text) => {
-        if (!text || !text.trim() || !user) return;
+        if (!text || !text.trim() || !auth.currentUser || !syncId) return;
         const taskId = 'task_' + Date.now();
         const newTask = {
           text: text.trim(),
@@ -178,19 +207,19 @@
         };
 
         setQuickTaskTexts(prev => ({ ...prev, [dateStr]: '' }));
-        const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+        const taskRef = doc(db, 'artifacts', appId, 'users', syncId, 'tasks', taskId);
         await setDoc(taskRef, newTask);
       };
 
       const handleToggleTask = async (taskId, currentCompletedState) => {
-        if (!user) return;
-        const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+        if (!auth.currentUser || !syncId) return;
+        const taskRef = doc(db, 'artifacts', appId, 'users', syncId, 'tasks', taskId);
         await setDoc(taskRef, { completed: !currentCompletedState }, { merge: true });
       };
 
       const handleDeleteTask = async (taskId) => {
-        if (!user) return;
-        const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+        if (!auth.currentUser || !syncId) return;
+        const taskRef = doc(db, 'artifacts', appId, 'users', syncId, 'tasks', taskId);
         await deleteDoc(taskRef);
       };
 
@@ -198,6 +227,18 @@
         const nextWeekStart = new Date(weekStart);
         nextWeekStart.setDate(weekStart.getDate() + (weeksToShift * 7));
         setWeekStart(nextWeekStart);
+      };
+
+      // --- DEVICE SYNC HANDLER ---
+      const handleSyncDevice = () => {
+        if (syncInput.trim().length > 0) {
+          const upperId = syncInput.trim().toUpperCase();
+          localStorage.setItem('aero_sync_id', upperId);
+          setSyncId(upperId);
+          setShowSyncModal(false);
+          setSyncInput('');
+          setSyncStatus('Syncing to new device...');
+        }
       };
 
       // --- RENDERERS ---
@@ -382,8 +423,9 @@
                 <p className="text-[10px] tracking-widest uppercase text-[#D0C4A4] opacity-80">Digital Translation</p>
               </div>
             </div>
-            <div className="flex flex-col items-end">
+            <div className="flex flex-col items-end gap-1">
               <span className="text-[9px] font-mono uppercase px-2 py-1 rounded tracking-wider bg-black/20 text-white/80">{syncStatus}</span>
+              <button onClick={() => setShowSyncModal(true)} className="text-[9px] underline text-[#D0C4A4] hover:text-white">Sync Devices</button>
             </div>
           </header>
 
@@ -405,6 +447,40 @@
               {activeTab === 'journal' && renderJournalSpread()}
             </main>
           </div>
+
+          {/* Sync Modal Overlay */}
+          {showSyncModal && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+              <div className="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full border border-[#E6DEC4]">
+                <h2 className="font-serif font-bold text-xl text-[#2E251E] mb-2">Sync Devices</h2>
+                <p className="text-xs text-gray-600 mb-4 leading-relaxed">
+                  To view your planner on another device, enter this device's Sync Key into the other device.
+                </p>
+                
+                <div className="bg-[#FAF8F5] p-3 rounded border border-[#EBE4D5] text-center mb-6">
+                  <span className="text-[10px] uppercase font-bold text-[#8C6239] block mb-1">Your Sync Key</span>
+                  <span className="font-mono text-xl tracking-widest text-[#2E251E] font-bold select-all">{syncId}</span>
+                </div>
+
+                <div className="mb-6">
+                  <label className="text-[10px] uppercase font-bold text-[#8C6239] block mb-1">Link to existing planner</label>
+                  <input 
+                    type="text" 
+                    value={syncInput}
+                    onChange={(e) => setSyncInput(e.target.value)}
+                    placeholder="Enter Key (e.g. A1B2C3)"
+                    className="w-full p-2 border border-[#E6DEC4] rounded font-mono uppercase tracking-widest text-center focus:outline-none focus:border-[#8C6239]"
+                  />
+                  <p className="text-[10px] text-red-500 mt-1">Warning: Linking will replace this device's current data.</p>
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={() => setShowSyncModal(false)} className="flex-1 py-2 rounded text-xs font-bold border border-[#E6DEC4] text-[#5C4D3C] hover:bg-[#FAF8F5]">Cancel</button>
+                  <button onClick={handleSyncDevice} className="flex-1 py-2 rounded text-xs font-bold bg-[#2E251E] text-white hover:bg-[#1A1410]">Link Device</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
