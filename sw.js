@@ -1,4 +1,3 @@
-```javascript
 const CACHE_NAME = 'aero-planner-cache-v1';
 const urlsToCache = [
   './',
