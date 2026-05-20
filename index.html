@@ -6,8 +6,12 @@
   <title>Aero Planner</title>
   <meta name="theme-color" content="#0f766e">
   
-  <!-- Custom Tab Icon -->
+  <!-- App Icons for Browser Tab and Apple/iOS Homescreen -->
   <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json">
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -399,7 +403,6 @@
       };
 
       const renderJournalSpread = () => {
-        // Parse date properly to display
         const parsedDateParts = selectedDateStr.split('-');
         const parsedDate = new Date(parsedDateParts[0], parsedDateParts[1] - 1, parsedDateParts[2]);
         const displayDate = parsedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
@@ -542,6 +545,21 @@
 
     const root = createRoot(document.getElementById('root'));
     root.render(<App />);
+  </script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .then(registration => {
+            console.log('ServiceWorker registered with scope:', registration.scope);
+          })
+          .catch(error => {
+            console.log('ServiceWorker registration failed:', error);
+          });
+      });
+    }
   </script>
 </body>
 </html>
